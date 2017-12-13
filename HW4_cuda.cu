@@ -123,21 +123,21 @@ __global__ void cal_gpu(int* dist, int B, int Round, int block_start_x, int bloc
 	int V = 20010;
 	int b_i = block_start_x + blockIdx.x;
 	int b_j = block_start_y + blockIdx.y;
+	int i = b_i * B + threadIdx.x;
+	int j = b_j * B + threadIdx.y;
+
+	// need block_(b_i, Round), block_(Round, b_j), (b_i, b_j)
+	// __shared__ int shared_mem[B*B*3];
 
 	// To calculate B*B elements in the block (b_i, b_j)
 	// For each block, it need to compute B times
 	for (int k = Round * B; k < (Round +1) * B && k < n; ++k) {
 		// To calculate original index of elements in the block (b_i, b_j)
 		// For instance, original index of (0,0) in block (1,2) is (2,5) for V=6,B=2
-		int block_internal_start_x 	= b_i * B;
-		int block_internal_start_y  = b_j * B;
-
-		int i = block_internal_start_x + threadIdx.x;
-		int j = block_internal_start_y + threadIdx.y;
 
 		if (i < n && j < n) {
-			if (dist[i*V+k] + dist[k*V+j] < dist[i*V+j]) {
-				dist[i*V+j] = dist[i*V+k] + dist[k*V+j];
+			if (dist[k*V+i] + dist[j*V+k] < dist[j*V+i]) {
+				dist[j*V+i] = dist[k*V+i] + dist[j*V+k];
 			}
 		}
 		__syncthreads();
