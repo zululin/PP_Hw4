@@ -16,7 +16,7 @@ static int Dist[V][V];
 // for device
 int* D = NULL;
 __global__ void gpu_phase1(int* dist, int B, int Round, int block_start_x, int block_start_y, int n);
-__global__ void gpu_phase2(int* dist, int B, int Round, int block_start_x, int block_start_y, int n);
+__global__ void gpu_phase2(int* dist, int B, int Round, int block_start_x, int block_start_y, int n, int pos);
 __global__ void gpu_phase3(int* dist, int B, int Round, int block_start_x, int block_start_y, int n);
 
 
@@ -91,21 +91,21 @@ void block_FW(int B)
         printf("%d %d\n", r, round);
 		/* Phase 1*/
 		blocks = {1, 1};
-		gpu_phase1<<<blocks, threads, B*B*sizeof(int)>>>(D, B,	r,	r,	r, n);
+		gpu_phase1<<<blocks, threads, B*B*1*sizeof(int)>>>(D, B,	r,	r,	r, n);
 
 		/* Phase 2*/
 		// up
 		blocks = {1, r};
-		gpu_phase2<<<blocks, threads>>>(D, B, r,     r,     0, n);
+		gpu_phase2<<<blocks, threads, B*B*2*sizeof(int)>>>(D, B, r,     r,     0, n, 1);
 		// down
 		blocks = {1, round - r -1};
-		gpu_phase2<<<blocks, threads>>>(D, B, r,     r,  r +1, n);
+		gpu_phase2<<<blocks, threads, B*B*2*sizeof(int)>>>(D, B, r,     r,  r +1, n, 1);
 		// left
 		blocks = {r, 1};
-		gpu_phase2<<<blocks, threads>>>(D, B, r,     0,     r, n);
+		gpu_phase2<<<blocks, threads, B*B*2*sizeof(int)>>>(D, B, r,     0,     r, n, 0);
 		// right
 		blocks = {round - r -1, 1};
-		gpu_phase2<<<blocks, threads>>>(D, B, r,  r +1,     r, n);
+		gpu_phase2<<<blocks, threads, B*B*2*sizeof(int)>>>(D, B, r,  r +1,     r, n, 0);
 
 		/* Phase 3*/
 		// upper left
@@ -137,12 +137,7 @@ __global__ void gpu_phase1(int* dist, int B, int Round, int block_start_x, int b
 	shared_mem[tid] = dist[j*V+i];
 	__syncthreads();
 
-	// To calculate B*B elements in the block (b_i, b_j)
-	// For each block, it need to compute B times
 	for (int k = Round * B; k < (Round +1) * B && k < n; ++k) {
-		// To calculate original index of elements in the block (b_i, b_j)
-		// For instance, original index of (0,0) in block (1,2) is (2,5) for V=6,B=2
-
 		int k_new = k - B * Round;
 
 		if (i < n && j < n) {
@@ -150,37 +145,62 @@ __global__ void gpu_phase1(int* dist, int B, int Round, int block_start_x, int b
 				shared_mem[tid] = shared_mem[k_new*B+tx] + shared_mem[ty*B+k_new];
 			}
 		}
-
 		__syncthreads();
 	}
 
 	dist[j*V+i] = shared_mem[tid];
 }
 
-__global__ void gpu_phase2(int* dist, int B, int Round, int block_start_x, int block_start_y, int n)
+extern __shared__ int shared_mem[];
+__global__ void gpu_phase2(int* dist, int B, int Round, int block_start_x, int block_start_y, int n, int pos)
 {
 	int V = 20010;
+	int tx = threadIdx.x;
+	int ty = threadIdx.y;
+	int tid = ty * B + tx;
 	int b_i = block_start_x + blockIdx.x;
 	int b_j = block_start_y + blockIdx.y;
 	int i = b_i * B + threadIdx.x;
 	int j = b_j * B + threadIdx.y;
 
-	// need block_(b_i, Round), block_(Round, b_j), (b_i, b_j)
-	// __shared__ int shared_mem[B*B*3];
+	// need self block - (b_i, b_j) & pivot block - (Round, Round)
+	shared_mem[tid+B*B] = dist[j*V+i];
+	shared_mem[tid] = dist[(Round*B+ty)*V+(Round*B+tx)];
+	__syncthreads();
 
-	// To calculate B*B elements in the block (b_i, b_j)
-	// For each block, it need to compute B times
 	for (int k = Round * B; k < (Round +1) * B && k < n; ++k) {
-		// To calculate original index of elements in the block (b_i, b_j)
-		// For instance, original index of (0,0) in block (1,2) is (2,5) for V=6,B=2
-
 		if (i < n && j < n) {
-			if (dist[k*V+i] + dist[j*V+k] < dist[j*V+i]) {
-				dist[j*V+i] = dist[k*V+i] + dist[j*V+k];
+			int k_new_1 = k - B * Round;
+			int i_new_1 = i - B * Round;
+			int j_new_1 = j - B * Round;
+
+			int k_new_2 = k - B * b_i;
+			int j_new_2 = j - B * b_j;
+
+			int i_new_3 = i - B * b_i;
+			int k_new_3 = k - B * b_j;
+
+			// up, down
+			if (pos == 1) {
+				int tmp = shared_mem[k_new_1*B+i_new_1] + shared_mem[j_new_2*B+k_new_2+B*B];
+
+				if (tmp < shared_mem[tid+B*B]) {
+					shared_mem[tid+B*B] = tmp;
+				}
+			}
+			// left, right
+			else {
+				int tmp = shared_mem[k_new_3*B+i_new_3+B*B] + shared_mem[j_new_1*B+k_new_1];
+
+				if (tmp < shared_mem[tid+B*B]) {
+					shared_mem[tid+B*B] = tmp;
+				}
 			}
 		}
 		__syncthreads();
 	}
+
+	dist[j*V+i] = shared_mem[tid+B*B];
 }
 
 __global__ void gpu_phase3(int* dist, int B, int Round, int block_start_x, int block_start_y, int n)
