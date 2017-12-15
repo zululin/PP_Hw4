@@ -8,7 +8,6 @@ void output(char *outFileName);
 
 void block_FW(int B);
 int ceil(int a, int b);
-bool cal(int B, int Round, int block_start_x, int block_start_y, int block_width, int block_height);
 
 int n, m;	// Number of vertices, edges
 static int Dist[V][V];
@@ -18,7 +17,6 @@ int* D = NULL;
 __global__ void gpu_phase1(int* dist, int B, int Round, int block_start_x, int block_start_y, int n);
 __global__ void gpu_phase2(int* dist, int B, int Round, int block_start_x, int block_start_y, int n, int pos);
 __global__ void gpu_phase3(int* dist, int B, int Round, int block_start_x, int block_start_y, int n);
-
 
 int main(int argc, char* argv[])
 {
@@ -128,9 +126,7 @@ extern __shared__ int shared_mem[];
 __global__ void gpu_phase1(int* dist, int B, int Round, int block_start_x, int block_start_y, int n)
 {
 	int V = 20010;
-	int tx = threadIdx.x;
-	int ty = threadIdx.y;
-	int tid = ty * B + tx;
+	int tid = threadIdx.y * B + threadIdx.x;
 	int i = (block_start_x + blockIdx.x) * B + threadIdx.x;
 	int j = (block_start_y + blockIdx.y) * B + threadIdx.y;
 
@@ -139,16 +135,23 @@ __global__ void gpu_phase1(int* dist, int B, int Round, int block_start_x, int b
 	__syncthreads();
 
 	for (int k = Round * B; k < (Round +1) * B && k < n; ++k) {
-		int k_new = k - B * Round;
-
 		if (i < n && j < n) {
-			if (shared_mem[k_new*B+tx] + shared_mem[ty*B+k_new] < shared_mem[tid]) {
-				shared_mem[tid] = shared_mem[k_new*B+tx] + shared_mem[ty*B+k_new];
+			//===== change new posision by: =====//
+			// new_i = origin_i - B * B_i
+			// new_j = origin_j - B * B_j
+			//===================================//
+			int k_new = k - B * Round;
+			int i_new = i - B * Round;
+			int j_new = j - B * Round;
+
+			int tmp = shared_mem[k_new*B+i_new] + shared_mem[j_new*B+k_new];
+
+			if (tmp < shared_mem[tid]) {
+				shared_mem[tid] = tmp;
 			}
 		}
 		__syncthreads();
 	}
-
 	dist[j*V+i] = shared_mem[tid];
 }
 
@@ -156,9 +159,7 @@ extern __shared__ int shared_mem[];
 __global__ void gpu_phase2(int* dist, int B, int Round, int block_start_x, int block_start_y, int n, int pos)
 {
 	int V = 20010;
-	int tx = threadIdx.x;
-	int ty = threadIdx.y;
-	int tid = ty * B + tx;
+	int tid = threadIdx.y * B + threadIdx.x;
 	int b_i = block_start_x + blockIdx.x;
 	int b_j = block_start_y + blockIdx.y;
 	int i = b_i * B + threadIdx.x;
@@ -166,23 +167,19 @@ __global__ void gpu_phase2(int* dist, int B, int Round, int block_start_x, int b
 
 	// need self block - (b_i, b_j) & pivot block - (Round, Round)
 	shared_mem[tid+B*B] = dist[j*V+i];
-	shared_mem[tid] = dist[(Round*B+ty)*V+(Round*B+tx)];
+	shared_mem[tid] = dist[(Round*B+threadIdx.y)*V+(Round*B+threadIdx.x)];
 	__syncthreads();
 
 	for (int k = Round * B; k < (Round +1) * B && k < n; ++k) {
 		if (i < n && j < n) {
-			int k_new_1 = k - B * Round;
-			int i_new_1 = i - B * Round;
-			int j_new_1 = j - B * Round;
-
-			int k_new_2 = k - B * b_i;
-			int j_new_2 = j - B * b_j;
-
-			int i_new_3 = i - B * b_i;
-			int k_new_3 = k - B * b_j;
-
 			// up, down
 			if (pos == 1) {
+				int k_new_1 = k - B * Round;
+				int i_new_1 = i - B * Round;
+
+				int k_new_2 = k - B * b_i;
+				int j_new_2 = j - B * b_j;
+
 				int tmp = shared_mem[k_new_1*B+i_new_1] + shared_mem[j_new_2*B+k_new_2+B*B];
 
 				if (tmp < shared_mem[tid+B*B]) {
@@ -191,7 +188,13 @@ __global__ void gpu_phase2(int* dist, int B, int Round, int block_start_x, int b
 			}
 			// left, right
 			else {
-				int tmp = shared_mem[k_new_3*B+i_new_3+B*B] + shared_mem[j_new_1*B+k_new_1];
+				int k_new_1 = k - B * Round;
+				int j_new_1 = j - B * Round;
+
+				int i_new_2 = i - B * b_i;
+				int k_new_2 = k - B * b_j;
+
+				int tmp = shared_mem[k_new_2*B+i_new_2+B*B] + shared_mem[j_new_1*B+k_new_1];
 
 				if (tmp < shared_mem[tid+B*B]) {
 					shared_mem[tid+B*B] = tmp;
@@ -206,32 +209,30 @@ __global__ void gpu_phase2(int* dist, int B, int Round, int block_start_x, int b
 __global__ void gpu_phase3(int* dist, int B, int Round, int block_start_x, int block_start_y, int n)
 {
 	int V = 20010;
-	int tx = threadIdx.x;
-	int ty = threadIdx.y;
-	int tid = ty * B + tx;
+	int tid = threadIdx.y * B + threadIdx.x;
 	int b_i = block_start_x + blockIdx.x;
 	int b_j = block_start_y + blockIdx.y;
-	int i = b_i * B + tx;
-	int j = b_j * B + ty;
+	int i = b_i * B + threadIdx.x;
+	int j = b_j * B + threadIdx.y;
 
 	// need self block - (b_i, b_j) & row / column block
 	shared_mem[tid] = dist[j*V+i];
-	shared_mem[tid+B*B] = dist[(b_j*B+ty)*V+(Round*B+tx)];			// left&right
-	shared_mem[tid+B*B*2] = dist[(Round*B+ty)*V+(b_i*B+tx)];		// up&down
+	shared_mem[tid+B*B] = dist[(b_j*B+threadIdx.y)*V+(Round*B+threadIdx.x)];			// left, right
+	shared_mem[tid+B*B*2] = dist[(Round*B+threadIdx.y)*V+(b_i*B+threadIdx.x)];			// up  , down
 	__syncthreads();
-
 
 	for (int k = Round * B; k < (Round +1) * B && k < n; ++k) {
 		if (i < n && j < n) {
-
+			// left, right
 			int i_new_1 = i - B * b_i;
 			int k_new_1 = k - B * Round;
 
+			// up, down
 			int k_new_2 = k - B * Round;
 			int j_new_2 = j - B * b_j;
 
-
 			int tmp = shared_mem[k_new_1*B+i_new_1+B*B*2] + shared_mem[j_new_2*B+k_new_2+B*B];
+
 			if (tmp < shared_mem[tid]) {
 				shared_mem[tid] = tmp;
 			}
