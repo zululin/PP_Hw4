@@ -88,7 +88,8 @@ void block_FW(int B)
 	printf("B: %d, Round: %d\n", B, round);
 
 	for (unsigned int r = 0; r < round; ++r) {
-        printf("%d %d\n", r, round);
+		if (r % 10 == 0)
+        	printf("%d %d\n", r, round);
 		/* Phase 1*/
 		blocks = {1, 1};
 		gpu_phase1<<<blocks, threads, B*B*1*sizeof(int)>>>(D, B,	r,	r,	r, n);
@@ -110,16 +111,16 @@ void block_FW(int B)
 		/* Phase 3*/
 		// upper left
 		blocks = {r, r};
-		gpu_phase3<<<blocks, threads>>>(D, B, r,     0,     0, n);
+		gpu_phase3<<<blocks, threads, B*B*3*sizeof(int)>>>(D, B, r,     0,     0, n);
 		// down left
 		blocks = {r, round -r -1};
-		gpu_phase3<<<blocks, threads>>>(D, B, r,     0,  r +1, n);
+		gpu_phase3<<<blocks, threads, B*B*3*sizeof(int)>>>(D, B, r,     0,  r +1, n);
 		// upper right
 		blocks = {round - r -1, r};
-		gpu_phase3<<<blocks, threads>>>(D, B, r,  r +1,     0, n);
+		gpu_phase3<<<blocks, threads, B*B*3*sizeof(int)>>>(D, B, r,  r +1,     0, n);
 		// down right
 		blocks = {round - r -1, round - r -1};
-		gpu_phase3<<<blocks, threads>>>(D, B, r,  r +1,  r +1, n);
+		gpu_phase3<<<blocks, threads, B*B*3*sizeof(int)>>>(D, B, r,  r +1,  r +1, n);
 	}
 }
 
@@ -199,32 +200,43 @@ __global__ void gpu_phase2(int* dist, int B, int Round, int block_start_x, int b
 		}
 		__syncthreads();
 	}
-
 	dist[j*V+i] = shared_mem[tid+B*B];
 }
 
 __global__ void gpu_phase3(int* dist, int B, int Round, int block_start_x, int block_start_y, int n)
 {
 	int V = 20010;
+	int tx = threadIdx.x;
+	int ty = threadIdx.y;
+	int tid = ty * B + tx;
 	int b_i = block_start_x + blockIdx.x;
 	int b_j = block_start_y + blockIdx.y;
-	int i = b_i * B + threadIdx.x;
-	int j = b_j * B + threadIdx.y;
+	int i = b_i * B + tx;
+	int j = b_j * B + ty;
 
-	// need block_(b_i, Round), block_(Round, b_j), (b_i, b_j)
-	// __shared__ int shared_mem[B*B*3];
+	// need self block - (b_i, b_j) & row / column block
+	shared_mem[tid] = dist[j*V+i];
+	shared_mem[tid+B*B] = dist[(b_j*B+ty)*V+(Round*B+tx)];			// left&right
+	shared_mem[tid+B*B*2] = dist[(Round*B+ty)*V+(b_i*B+tx)];		// up&down
+	__syncthreads();
 
-	// To calculate B*B elements in the block (b_i, b_j)
-	// For each block, it need to compute B times
+
 	for (int k = Round * B; k < (Round +1) * B && k < n; ++k) {
-		// To calculate original index of elements in the block (b_i, b_j)
-		// For instance, original index of (0,0) in block (1,2) is (2,5) for V=6,B=2
-
 		if (i < n && j < n) {
-			if (dist[k*V+i] + dist[j*V+k] < dist[j*V+i]) {
-				dist[j*V+i] = dist[k*V+i] + dist[j*V+k];
+
+			int i_new_1 = i - B * b_i;
+			int k_new_1 = k - B * Round;
+
+			int k_new_2 = k - B * Round;
+			int j_new_2 = j - B * b_j;
+
+
+			int tmp = shared_mem[k_new_1*B+i_new_1+B*B*2] + shared_mem[j_new_2*B+k_new_2+B*B];
+			if (tmp < shared_mem[tid]) {
+				shared_mem[tid] = tmp;
 			}
 		}
 		__syncthreads();
 	}
+	dist[j*V+i] = shared_mem[tid];
 }
