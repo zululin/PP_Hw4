@@ -94,32 +94,51 @@ void block_FW(int B)
 		gpu_phase1<<<blocks, threads, B*B*1*sizeof(int)>>>(device_ptr, B,	r,	r,	r, n);
 
 		/* Phase 2*/
-		// up
-		blocks = {1, r};
-		gpu_phase2<<<blocks, threads, B*B*2*sizeof(int)>>>(device_ptr, B, r,     r,     0, n, 1);
-		// down
-		blocks = {1, round - r -1};
-		gpu_phase2<<<blocks, threads, B*B*2*sizeof(int)>>>(device_ptr, B, r,     r,  r +1, n, 1);
-		// left
-		blocks = {r, 1};
-		gpu_phase2<<<blocks, threads, B*B*2*sizeof(int)>>>(device_ptr, B, r,     0,     r, n, 0);
-		// right
-		blocks = {round - r -1, 1};
-		gpu_phase2<<<blocks, threads, B*B*2*sizeof(int)>>>(device_ptr, B, r,  r +1,     r, n, 0);
+		if (r > 0) {
+			// up
+			blocks = {1, r};
+			gpu_phase2<<<blocks, threads, B*B*2*sizeof(int)>>>(device_ptr, B, r,     r,     0, n, 1);
+
+			// left
+			blocks = {r, 1};
+			gpu_phase2<<<blocks, threads, B*B*2*sizeof(int)>>>(device_ptr, B, r,     0,     r, n, 0);
+		}
+		if (r < round - 1) {
+			// down
+			blocks = {1, round - r -1};
+			gpu_phase2<<<blocks, threads, B*B*2*sizeof(int)>>>(device_ptr, B, r,     r,  r +1, n, 1);
+
+			// right
+			blocks = {round - r -1, 1};
+			gpu_phase2<<<blocks, threads, B*B*2*sizeof(int)>>>(device_ptr, B, r,  r +1,     r, n, 0);
+		}
 
 		/* Phase 3*/
-		// upper left
-		blocks = {r, r};
-		gpu_phase3<<<blocks, threads, B*B*3*sizeof(int)>>>(device_ptr, B, r,     0,     0, n);
-		// down left
-		blocks = {r, round -r -1};
-		gpu_phase3<<<blocks, threads, B*B*3*sizeof(int)>>>(device_ptr, B, r,     0,  r +1, n);
-		// upper right
-		blocks = {round - r -1, r};
-		gpu_phase3<<<blocks, threads, B*B*3*sizeof(int)>>>(device_ptr, B, r,  r +1,     0, n);
-		// down right
-		blocks = {round - r -1, round - r -1};
-		gpu_phase3<<<blocks, threads, B*B*3*sizeof(int)>>>(device_ptr, B, r,  r +1,  r +1, n);
+		if (r == 0) {
+			// down right
+			blocks = {round - r -1, round - r -1};
+			gpu_phase3<<<blocks, threads, B*B*3*sizeof(int)>>>(device_ptr, B, r,  r +1,  r +1, n);
+
+		}
+		else if (r == round - 1) {
+			// upper left
+			blocks = {r, r};
+			gpu_phase3<<<blocks, threads, B*B*3*sizeof(int)>>>(device_ptr, B, r,     0,     0, n);
+		}
+		else {
+			// down right
+			blocks = {round - r -1, round - r -1};
+			gpu_phase3<<<blocks, threads, B*B*3*sizeof(int)>>>(device_ptr, B, r,  r +1,  r +1, n);
+			// upper left
+			blocks = {r, r};
+			gpu_phase3<<<blocks, threads, B*B*3*sizeof(int)>>>(device_ptr, B, r,     0,     0, n);
+			// upper right
+			blocks = {r, round -r -1};
+			gpu_phase3<<<blocks, threads, B*B*3*sizeof(int)>>>(device_ptr, B, r,     0,  r +1, n);
+			// down left
+			blocks = {round - r -1, r};
+			gpu_phase3<<<blocks, threads, B*B*3*sizeof(int)>>>(device_ptr, B, r,  r +1,     0, n);
+		}
 	}
 }
 
