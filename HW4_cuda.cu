@@ -95,20 +95,20 @@ void block_FW(int B)
 
 		/* Phase 2*/
 		if (r > 0) {
-			// up
+			// left
 			blocks = {1, r};
 			gpu_phase2<<<blocks, threads, B*B*2*sizeof(int)>>>(device_ptr, B, r,     r,     0, n, 1);
 
-			// left
+			// up
 			blocks = {r, 1};
 			gpu_phase2<<<blocks, threads, B*B*2*sizeof(int)>>>(device_ptr, B, r,     0,     r, n, 0);
 		}
 		if (r < round - 1) {
-			// down
+			// right
 			blocks = {1, round - r -1};
 			gpu_phase2<<<blocks, threads, B*B*2*sizeof(int)>>>(device_ptr, B, r,     r,  r +1, n, 1);
 
-			// right
+			// down
 			blocks = {round - r -1, 1};
 			gpu_phase2<<<blocks, threads, B*B*2*sizeof(int)>>>(device_ptr, B, r,  r +1,     r, n, 0);
 		}
