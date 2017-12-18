@@ -2,6 +2,7 @@
 #include <stdlib.h>
 
 const int INF = 1000000000;
+int V = 20010;
 void input(char *inFileName);
 void output(char *outFileName);
 
@@ -9,13 +10,14 @@ void block_FW(int B);
 int ceil(int a, int b);
 
 int n, m;	// Number of vertices, edges
-int* host_ptr;
+int* host_ptr = NULL;
+size_t pitch;
 
 // for device
 int* device_ptr = NULL;
-__global__ void gpu_phase1(int* dist, int B, int Round, int block_start_x, int block_start_y, int n);
-__global__ void gpu_phase2(int* dist, int B, int Round, int block_start_x, int block_start_y, int n, int pos);
-__global__ void gpu_phase3(int* dist, int B, int Round, int block_start_x, int block_start_y, int n);
+__global__ void gpu_phase1(int* dist, int B, int Round, int block_start_x, int block_start_y, int n, size_t pitch);
+__global__ void gpu_phase2(int* dist, int B, int Round, int block_start_x, int block_start_y, int n, int pos, size_t pitch);
+__global__ void gpu_phase3(int* dist, int B, int Round, int block_start_x, int block_start_y, int n, size_t pitch);
 
 int main(int argc, char* argv[])
 {
@@ -23,12 +25,12 @@ int main(int argc, char* argv[])
 	int B = atoi(argv[3]);
 
 	// allocate memory for device
-	cudaMalloc(&device_ptr, (size_t)n * n * sizeof(int));
-	cudaMemcpy(device_ptr, host_ptr, (size_t)n * n * sizeof(int), cudaMemcpyHostToDevice);
+	cudaMallocPitch(&device_ptr, &pitch, V*sizeof(int), V);
+	cudaMemcpy2D(device_ptr, pitch, host_ptr, V*sizeof(int), V*sizeof(int), V, cudaMemcpyHostToDevice);
 
 	block_FW(B);
 
-	cudaMemcpy(host_ptr, device_ptr, (size_t)n * n * sizeof(int), cudaMemcpyDeviceToHost);
+	cudaMemcpy2D(host_ptr, V*sizeof(int), device_ptr, pitch, V*sizeof(int), V, cudaMemcpyDeviceToHost);
 	cudaFree(device_ptr);
 
 	output(argv[2]);
@@ -43,19 +45,20 @@ void input(char *inFileName)
 	fscanf(infile, "%d %d", &n, &m);
 
 	// Malloc host memory
-	host_ptr = (int*)malloc(n * n * sizeof(int));
+	V = n + 10;
+	host_ptr = (int*)malloc((size_t)V * V * sizeof(int));
 
 	for (int i = 0; i < n; ++i) {
 		for (int j = 0; j < n; ++j) {
-			if (i == j)	host_ptr[i*n+j] = 0;
-			else		host_ptr[i*n+j] = INF;
+			if (i == j)	host_ptr[i*V+j] = 0;
+			else		host_ptr[i*V+j] = INF;
 		}
 	}
 
 	while (--m >= 0) {
 		int a, b, v;
 		fscanf(infile, "%d %d %d", &a, &b, &v);
-		host_ptr[a*n+b] = v;
+		host_ptr[a*V+b] = v;
 	}
     fclose(infile);
 }
@@ -65,10 +68,10 @@ void output(char *outFileName)
 	FILE *outfile = fopen(outFileName, "w");
 	for (int i = 0; i < n; ++i) {
 		for (int j = 0; j < n; ++j) {
-            if (host_ptr[i*n+j] >= INF)
-                host_ptr[i*n+j] = INF;
+            if (host_ptr[i*V+j] >= INF)
+                host_ptr[i*V+j] = INF;
 		}
-		fwrite(&host_ptr[i*n], sizeof(int), n, outfile);
+		fwrite(&host_ptr[i*V], sizeof(int), n, outfile);
 	}
     fclose(outfile);
 }
@@ -91,61 +94,61 @@ void block_FW(int B)
         	printf("%d %d\n", r, round);
 		/* Phase 1*/
 		blocks = {1, 1};
-		gpu_phase1<<<blocks, threads, B*B*1*sizeof(int)>>>(device_ptr, B,	r,	r,	r, n);
+		gpu_phase1<<<blocks, threads, B*B*1*sizeof(int)>>>(device_ptr, B,	r,	r,	r, n, pitch/sizeof(int));
 
 		/* Phase 2*/
 		if (r > 0) {
 			// left
 			blocks = {1, r};
-			gpu_phase2<<<blocks, threads, B*B*2*sizeof(int)>>>(device_ptr, B, r,     r,     0, n, 1);
+			gpu_phase2<<<blocks, threads, B*B*2*sizeof(int)>>>(device_ptr, B, r,     r,     0, n, 1, pitch/sizeof(int));
 
 			// up
 			blocks = {r, 1};
-			gpu_phase2<<<blocks, threads, B*B*2*sizeof(int)>>>(device_ptr, B, r,     0,     r, n, 0);
+			gpu_phase2<<<blocks, threads, B*B*2*sizeof(int)>>>(device_ptr, B, r,     0,     r, n, 0, pitch/sizeof(int));
 		}
 		if (r < round - 1) {
 			// right
 			blocks = {1, round - r -1};
-			gpu_phase2<<<blocks, threads, B*B*2*sizeof(int)>>>(device_ptr, B, r,     r,  r +1, n, 1);
+			gpu_phase2<<<blocks, threads, B*B*2*sizeof(int)>>>(device_ptr, B, r,     r,  r +1, n, 1, pitch/sizeof(int));
 
 			// down
 			blocks = {round - r -1, 1};
-			gpu_phase2<<<blocks, threads, B*B*2*sizeof(int)>>>(device_ptr, B, r,  r +1,     r, n, 0);
+			gpu_phase2<<<blocks, threads, B*B*2*sizeof(int)>>>(device_ptr, B, r,  r +1,     r, n, 0, pitch/sizeof(int));
 		}
 
 		/* Phase 3*/
 		if (r == 0) {
 			// down right
 			blocks = {round - r -1, round - r -1};
-			gpu_phase3<<<blocks, threads, B*B*3*sizeof(int)>>>(device_ptr, B, r,  r +1,  r +1, n);
+			gpu_phase3<<<blocks, threads, B*B*3*sizeof(int)>>>(device_ptr, B, r,  r +1,  r +1, n, pitch/sizeof(int));
 
 		}
 		else if (r == round - 1) {
 			// upper left
 			blocks = {r, r};
-			gpu_phase3<<<blocks, threads, B*B*3*sizeof(int)>>>(device_ptr, B, r,     0,     0, n);
+			gpu_phase3<<<blocks, threads, B*B*3*sizeof(int)>>>(device_ptr, B, r,     0,     0, n, pitch/sizeof(int));
 		}
 		else {
 			// down right
 			blocks = {round - r -1, round - r -1};
-			gpu_phase3<<<blocks, threads, B*B*3*sizeof(int)>>>(device_ptr, B, r,  r +1,  r +1, n);
+			gpu_phase3<<<blocks, threads, B*B*3*sizeof(int)>>>(device_ptr, B, r,  r +1,  r +1, n, pitch/sizeof(int));
 			// upper left
 			blocks = {r, r};
-			gpu_phase3<<<blocks, threads, B*B*3*sizeof(int)>>>(device_ptr, B, r,     0,     0, n);
+			gpu_phase3<<<blocks, threads, B*B*3*sizeof(int)>>>(device_ptr, B, r,     0,     0, n, pitch/sizeof(int));
 			// upper right
 			blocks = {r, round -r -1};
-			gpu_phase3<<<blocks, threads, B*B*3*sizeof(int)>>>(device_ptr, B, r,     0,  r +1, n);
+			gpu_phase3<<<blocks, threads, B*B*3*sizeof(int)>>>(device_ptr, B, r,     0,  r +1, n, pitch/sizeof(int));
 			// down left
 			blocks = {round - r -1, r};
-			gpu_phase3<<<blocks, threads, B*B*3*sizeof(int)>>>(device_ptr, B, r,  r +1,     0, n);
+			gpu_phase3<<<blocks, threads, B*B*3*sizeof(int)>>>(device_ptr, B, r,  r +1,     0, n, pitch/sizeof(int));
 		}
 	}
 }
 
 extern __shared__ int shared_mem[];
-__global__ void gpu_phase1(int* dist, int B, int Round, int block_start_x, int block_start_y, int n)
+__global__ void gpu_phase1(int* dist, int B, int Round, int block_start_x, int block_start_y, int n, size_t pitch)
 {
-	int V = n;
+	int V = pitch;
 	int tid = threadIdx.y * B + threadIdx.x;
 	int i = (block_start_x + blockIdx.x) * B + threadIdx.x;
 	int j = (block_start_y + blockIdx.y) * B + threadIdx.y;
@@ -176,9 +179,9 @@ __global__ void gpu_phase1(int* dist, int B, int Round, int block_start_x, int b
 }
 
 extern __shared__ int shared_mem[];
-__global__ void gpu_phase2(int* dist, int B, int Round, int block_start_x, int block_start_y, int n, int pos)
+__global__ void gpu_phase2(int* dist, int B, int Round, int block_start_x, int block_start_y, int n, int pos, size_t pitch)
 {
-	int V = n;
+	int V = pitch;
 	int tid = threadIdx.y * B + threadIdx.x;
 	int b_i = block_start_x + blockIdx.x;
 	int b_j = block_start_y + blockIdx.y;
@@ -226,9 +229,9 @@ __global__ void gpu_phase2(int* dist, int B, int Round, int block_start_x, int b
 	dist[j*V+i] = shared_mem[tid+B*B];
 }
 
-__global__ void gpu_phase3(int* dist, int B, int Round, int block_start_x, int block_start_y, int n)
+__global__ void gpu_phase3(int* dist, int B, int Round, int block_start_x, int block_start_y, int n, size_t pitch)
 {
-	int V = n;
+	int V = pitch;
 	int tid = threadIdx.y * B + threadIdx.x;
 	int b_i = block_start_x + blockIdx.x;
 	int b_j = block_start_y + blockIdx.y;
